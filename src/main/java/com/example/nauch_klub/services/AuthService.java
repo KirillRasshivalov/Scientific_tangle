@@ -3,13 +3,16 @@ package com.example.nauch_klub.services;
 import com.example.nauch_klub.config.JwtService;
 import com.example.nauch_klub.dto.AuthRequest;
 import com.example.nauch_klub.dto.AuthResponse;
+import com.example.nauch_klub.dto.UpdateRequest;
 import com.example.nauch_klub.entities.User;
 import com.example.nauch_klub.repositories.UserRepository;
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+
 
 @Service
 @RequiredArgsConstructor
@@ -44,5 +47,20 @@ public class AuthService {
 
         String token = jwtService.generateToken(user);
         return new AuthResponse(token, user.getUsername(), user.getRole());
+    }
+
+    @Transactional
+    public AuthResponse updateRole(UpdateRequest request) {
+        authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(request.authRequest().username(), request.authRequest().password())
+        );
+
+        User user = userRepository.findByUsername(request.username())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        user.setRole(request.role().toString());
+        user = userRepository.save(user);
+
+        String newToken = jwtService.generateToken(user);
+        return new AuthResponse(newToken, request.username(), request.role().toString());
     }
 }
