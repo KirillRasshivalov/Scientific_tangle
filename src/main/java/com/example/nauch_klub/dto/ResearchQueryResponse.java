@@ -10,7 +10,11 @@ public record ResearchQueryResponse(
         String answer,
         double confidence,
         Instant updatedAt,
+        int embeddingDimension,
+        List<QdrantSearchResult> qdrantResults,
         List<String> graphPath,
-        List<Map<String, String>> sources
+        List<Map<String, Object>> sources,
+        List<Map<String, Object>> verifiedFacts,
+        List<String> warnings
 ) {
 }

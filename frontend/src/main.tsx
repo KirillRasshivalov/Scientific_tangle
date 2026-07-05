@@ -15,6 +15,8 @@ import {
 import {
   authRequest,
   AuthResponse,
+  getKnowledgeGraph,
+  KnowledgeGraphResponse,
   KnowledgeUploadResponse,
   ping,
   ResearchQueryResponse,
@@ -54,6 +56,12 @@ function App() {
   const [uploadError, setUploadError] = useState("");
   const [isUploadLoading, setIsUploadLoading] = useState(false);
   const [uploadResult, setUploadResult] = useState<KnowledgeUploadResponse | null>(null);
+  const [graphData, setGraphData] = useState<KnowledgeGraphResponse | null>(null);
+  const [graphError, setGraphError] = useState("");
+  const [graphSearch, setGraphSearch] = useState("");
+  const [graphType, setGraphType] = useState("");
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string | null>(null);
+  const [linkDistance, setLinkDistance] = useState(230);
 
   useEffect(() => {
     ping(session?.token)
@@ -61,12 +69,112 @@ function App() {
       .catch(() => setServerState("Java API недоступен"));
   }, [session?.token]);
 
+  useEffect(() => {
+    if (!session) {
+      setGraphData(null);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      getKnowledgeGraph(session.token, {
+        search: graphSearch.trim(),
+        type: graphType,
+        depth: 2,
+        limit: 80
+      })
+        .then((data) => {
+          setGraphData(data);
+          setSelectedGraphNodeId(data.nodes[0]?.id ?? null);
+          setGraphError("");
+        })
+        .catch((requestError) => {
+          setGraphError(
+            requestError instanceof Error
+              ? requestError.message
+              : "Не удалось загрузить граф знаний."
+          );
+        });
+    }, 350);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [session?.token, graphSearch, graphType]);
+
   const canSubmit = useMemo(
     () => username.trim().length >= 3 && password.length >= 4 && !isSubmitting,
     [isSubmitting, password.length, username]
   );
 
   const canSendQuery = query.trim().length >= 8 && !isQueryLoading;
+
+  const graphLayout = useMemo(() => {
+    if (!graphData) {
+      return { nodes: [], edges: [], selectedNode: null, typeLabels: [] };
+    }
+
+    const width = 1180;
+    const height = 680;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const typeOrder = ["Process", "Material", "Equipment", "Experiment", "Publication", "Expert", "Facility", "Property"];
+    const typeColors = new Map([
+      ["Process", "#8f2e3b"],
+      ["Material", "#0f4f5a"],
+      ["Equipment", "#596b2f"],
+      ["Experiment", "#7a4e20"],
+      ["Publication", "#40517a"],
+      ["Expert", "#6b3d6f"],
+      ["Facility", "#2f665c"],
+      ["Property", "#7b5b18"]
+    ]);
+    const normalizedSearch = graphSearch.trim().toLowerCase();
+    const selectedId = selectedGraphNodeId ?? graphData.nodes[0]?.id ?? null;
+    const neighborIds = new Set<string>();
+
+    graphData.edges.forEach((edge) => {
+      if (edge.source === selectedId) neighborIds.add(edge.target);
+      if (edge.target === selectedId) neighborIds.add(edge.source);
+    });
+
+    const nodes = graphData.nodes.map((node, index) => {
+      const typeIndex = Math.max(typeOrder.indexOf(node.type), 0);
+      const ring = 1 + (typeIndex % 3) * 0.22;
+      const angle =
+        (2 * Math.PI * index) / Math.max(graphData.nodes.length, 1) -
+        Math.PI / 2 +
+        typeIndex * 0.23;
+      const radius = Math.min(linkDistance * ring, 315);
+      const isSelected = node.id === selectedId;
+      const isNeighbor = neighborIds.has(node.id);
+      const isMatched =
+        normalizedSearch.length > 0 &&
+        `${node.label} ${node.type} ${node.description}`.toLowerCase().includes(normalizedSearch);
+      const isDimmed = Boolean(selectedId) && !isSelected && !isNeighbor;
+
+      return {
+        ...node,
+        color: typeColors.get(node.type) ?? "#33413d",
+        isDimmed,
+        isMatched,
+        isNeighbor,
+        isSelected,
+        x: centerX + radius * Math.cos(angle),
+        y: centerY + radius * Math.sin(angle)
+      };
+    });
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const edges = graphData.edges
+      .map((edge) => ({
+        ...edge,
+        sourceNode: byId.get(edge.source),
+        targetNode: byId.get(edge.target),
+        isActive: edge.source === selectedId || edge.target === selectedId
+      }))
+      .filter((edge) => edge.sourceNode && edge.targetNode);
+    const typeLabels = Array.from(new Set(nodes.map((node) => node.type))).sort();
+    const selectedNode = selectedId ? byId.get(selectedId) ?? null : null;
+
+    return { nodes, edges, selectedNode, typeLabels };
+  }, [graphData, graphSearch, linkDistance, selectedGraphNodeId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -158,6 +266,7 @@ function App() {
     setSession(null);
     setQueryResult(null);
     setUploadResult(null);
+    setGraphData(null);
   }
 
   if (session) {
@@ -218,7 +327,7 @@ function App() {
             <article className="metric-card">
               <GitBranch size={22} aria-hidden="true" />
               <span>Связи графа</span>
-              <strong>3-4 уровня</strong>
+              <strong>{graphData ? graphData.edges.length : "3-4 уровня"}</strong>
             </article>
             <article className="metric-card">
               <FlaskConical size={22} aria-hidden="true" />
@@ -265,38 +374,184 @@ function App() {
                   <div className="result-meta">
                     <span>ID: {queryResult.requestId}</span>
                     <span>Confidence: {Math.round(queryResult.confidence * 100)}%</span>
+                    <span>Embedding: {queryResult.embeddingDimension}</span>
                     <span>Updated: {new Date(queryResult.updatedAt).toLocaleString("ru-RU")}</span>
                   </div>
-                  <div className="source-list">
-                    {queryResult.sources.map((source) => (
-                      <div className="source-item" key={`${source.title}-${source.type}`}>
-                        <strong>{source.title}</strong>
-                        <span>{source.type}</span>
-                      </div>
-                    ))}
-                  </div>
+                  {queryResult.qdrantResults?.length ? (
+                    <div className="source-list">
+                      {queryResult.qdrantResults.map((result) => (
+                        <div className="source-item" key={result.id}>
+                          <strong>{result.title}</strong>
+                          <span>{Math.round(result.score * 100)}% · {result.domain} · {result.year}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {queryResult.verifiedFacts?.length ? (
+                    <div className="source-list">
+                      {queryResult.verifiedFacts.slice(0, 5).map((fact, index) => (
+                        <div className="source-item" key={`${fact.id ?? index}`}>
+                          <strong>{String(fact.statement ?? fact.text ?? fact.claim ?? fact.subject ?? "Проверенный факт")}</strong>
+                          <span>
+                            {String(fact.nli_status ?? fact.status ?? "n/a")} · score {String(fact.nli_score ?? fact.score ?? "n/a")}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {queryResult.warnings?.length ? (
+                    <div className="source-list">
+                      {queryResult.warnings.map((warning) => (
+                        <div className="source-item warning-item" key={warning}>
+                          <strong>Warning</strong>
+                          <span>{warning}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <p>
-                  Здесь появится структурированный ответ от Java API. Пока Python-сервисов
-                  нет, Java вернет заглушку и запишет пользовательский запрос в файл логов.
+                  Здесь появится структурированный ответ от Java API. Запрос будет
+                  преобразован в embedding, сопоставлен с Qdrant и связан с графом Neo4j.
                 </p>
               )}
               <div className="source-row">
                 <ShieldCheck size={18} aria-hidden="true" />
-                <span>JWT передается в защищенный endpoint `/api/research/query`.</span>
+                <span>JWT передается в защищенные endpoints Java API.</span>
               </div>
             </article>
-            <article className="graph-panel">
-              <h2>Цепочка знаний</h2>
-              <div className="graph-line">
-                {(queryResult?.graphPath ?? ["Material", "Process", "Equipment", "Result"]).map(
-                  (node) => (
-                    <span key={node}>{node}</span>
-                  )
-                )}
+          </section>
+
+          <section className="graph-workspace">
+            <div className="graph-header">
+              <div>
+                <span className="eyebrow">Neo4j knowledge graph</span>
+                <h2>Граф знаний</h2>
               </div>
-            </article>
+              <div className="graph-stats">
+                <span>{graphData ? graphData.nodes.length : 0} узлов</span>
+                <span>{graphData ? graphData.edges.length : 0} связей</span>
+              </div>
+            </div>
+
+            <div className="graph-toolbar">
+              <label className="graph-search">
+                <FileSearch size={18} aria-hidden="true" />
+                <input
+                  onChange={(event) => setGraphSearch(event.target.value)}
+                  placeholder="Найти материал, процесс, эксперимент или публикацию"
+                  type="search"
+                  value={graphSearch}
+                />
+              </label>
+              <label className="graph-type-filter">
+                <span>Тип</span>
+                <select onChange={(event) => setGraphType(event.target.value)} value={graphType}>
+                  <option value="">Все</option>
+                  <option value="Material">Material</option>
+                  <option value="Process">Process</option>
+                  <option value="Equipment">Equipment</option>
+                  <option value="Property">Property</option>
+                  <option value="Experiment">Experiment</option>
+                  <option value="Publication">Publication</option>
+                  <option value="Expert">Expert</option>
+                  <option value="Facility">Facility</option>
+                </select>
+              </label>
+              <label className="graph-range">
+                <span>Дистанция связей</span>
+                <input
+                  max="300"
+                  min="170"
+                  onChange={(event) => setLinkDistance(Number(event.target.value))}
+                  type="range"
+                  value={linkDistance}
+                />
+              </label>
+            </div>
+
+            {graphData ? (
+              <div className="knowledge-graph">
+                <div className="graph-canvas">
+                  <svg viewBox="0 0 1180 680" role="img" aria-label="Knowledge graph">
+                    <defs>
+                      <marker
+                        id="graph-arrow"
+                        markerHeight="8"
+                        markerWidth="8"
+                        orient="auto"
+                        refX="7"
+                        refY="4"
+                        viewBox="0 0 8 8"
+                      >
+                        <path d="M0,0 L8,4 L0,8 Z" fill="#8aa09a" />
+                      </marker>
+                    </defs>
+                    {graphLayout.edges.map((edge) => (
+                      <g className={edge.isActive ? "graph-link active" : "graph-link"} key={edge.id}>
+                        <line
+                          className="graph-edge"
+                          x1={edge.sourceNode!.x}
+                          y1={edge.sourceNode!.y}
+                          x2={edge.targetNode!.x}
+                          y2={edge.targetNode!.y}
+                        />
+                        <text
+                          className="graph-edge-label"
+                          x={(edge.sourceNode!.x + edge.targetNode!.x) / 2}
+                          y={(edge.sourceNode!.y + edge.targetNode!.y) / 2}
+                        >
+                          {edge.label}
+                        </text>
+                      </g>
+                    ))}
+                    {graphLayout.nodes.map((node) => (
+                      <g
+                        className={[
+                          "graph-node",
+                          node.isSelected ? "active" : "",
+                          node.isNeighbor ? "neighbor" : "",
+                          node.isMatched ? "matched" : "",
+                          node.isDimmed ? "muted" : ""
+                        ].join(" ")}
+                        key={node.id}
+                        onClick={() => setSelectedGraphNodeId(node.id)}
+                        role="button"
+                        tabIndex={0}
+                      >
+                        <circle cx={node.x} cy={node.y} r={node.isSelected ? 34 : 27} style={{ fill: node.color }} />
+                        <text className="graph-node-type" x={node.x} y={node.y + 4}>{node.type}</text>
+                        <text className="graph-node-label" x={node.x} y={node.y + 52}>{node.label}</text>
+                        <title>{node.label}: {node.description}</title>
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+
+                <div className="graph-footer">
+                  <div className="graph-legend">
+                    {graphLayout.typeLabels.map((type) => (
+                      <span key={type}>{type}</span>
+                    ))}
+                  </div>
+                  {graphLayout.selectedNode ? (
+                    <aside className="graph-details">
+                      <span>{graphLayout.selectedNode.type}</span>
+                      <strong>{graphLayout.selectedNode.label}</strong>
+                      <p>{graphLayout.selectedNode.description}</p>
+                    </aside>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="graph-empty">
+                {(queryResult?.graphPath ?? ["Material", "Process", "Equipment", "Result"]).map((node) => (
+                  <span key={node}>{node}</span>
+                ))}
+              </div>
+            )}
+            {graphError ? <p className="error-message">{graphError}</p> : null}
           </section>
         </section>
       </main>

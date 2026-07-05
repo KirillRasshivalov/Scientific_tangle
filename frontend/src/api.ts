@@ -11,6 +11,17 @@ export type AuthResponse = {
   role: string;
 };
 
+export type QdrantSearchResult = {
+  id: string;
+  score: number;
+  title: string;
+  text: string;
+  domain: string;
+  geography: string;
+  sourceType: string;
+  year: string;
+};
+
 export type ResearchQueryRequest = {
   query: string;
   filters: Record<string, string>;
@@ -22,8 +33,12 @@ export type ResearchQueryResponse = {
   answer: string;
   confidence: number;
   updatedAt: string;
+  embeddingDimension: number;
+  qdrantResults: QdrantSearchResult[];
   graphPath: string[];
-  sources: Array<Record<string, string>>;
+  sources: Array<Record<string, unknown>>;
+  verifiedFacts: Array<Record<string, unknown>>;
+  warnings: string[];
 };
 
 export type KnowledgeUploadResponse = {
@@ -35,6 +50,26 @@ export type KnowledgeUploadResponse = {
   size: number;
   contentType: string;
   uploadedAt: string;
+};
+
+export type KnowledgeGraphNode = {
+  id: string;
+  label: string;
+  type: string;
+  description: string;
+};
+
+export type KnowledgeGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  label: string;
+};
+
+export type KnowledgeGraphResponse = {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
 };
 
 async function parseResponse(response: Response) {
@@ -136,4 +171,41 @@ export async function uploadKnowledgeFile(
   }
 
   return data as KnowledgeUploadResponse;
+}
+
+export type KnowledgeGraphParams = {
+  search?: string;
+  type?: string;
+  depth?: number;
+  limit?: number;
+};
+
+export async function getKnowledgeGraph(
+  token: string,
+  params: KnowledgeGraphParams = {}
+): Promise<KnowledgeGraphResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.search) searchParams.set("search", params.search);
+  if (params.type) searchParams.set("type", params.type);
+  if (params.depth) searchParams.set("depth", String(params.depth));
+  if (params.limit) searchParams.set("limit", String(params.limit));
+  const query = searchParams.toString();
+
+  const response = await fetch(`${API_BASE_URL}/api/graph/knowledge${query ? `?${query}` : ""}`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseResponse(response);
+
+  if (!response.ok) {
+    const message =
+      typeof data === "string" && data.trim().length > 0
+        ? data
+        : "Не удалось загрузить граф знаний.";
+    throw new Error(message);
+  }
+
+  return data as KnowledgeGraphResponse;
 }

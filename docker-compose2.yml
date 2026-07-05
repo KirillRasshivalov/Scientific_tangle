@@ -1,0 +1,33 @@
+# Туннель убран: коллега (BE1) поднимает образ из Docker Hub у себя.
+#   Автор:   docker compose build && docker compose push
+#   Коллега: docker compose up -d          (образ тянется из Hub)
+#            либо одной командой без compose — см. README.
+# DOCKERHUB_USER берётся из .env (по умолчанию — подставь свой логин ниже).
+
+services:
+  online:                         # FastAPI + NLI (rubert вшит в образ)
+    image: ${DOCKERHUB_USER:-yourname}/nornikel-online:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.online
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  offline:                        # батч-пайплайн: по требованию, не автостарт
+    image: ${DOCKERHUB_USER:-yourname}/nornikel-offline:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.offline
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - hf_cache:/root/.cache/huggingface
+    profiles:
+      - offline
+
+volumes:
+  hf_cache:

@@ -1,97 +1,57 @@
 package com.example.nauch_klub.services;
 
 import com.example.nauch_klub.dto.JsonDocument;
-import io.qdrant.client.QdrantClient;
-import io.qdrant.client.QdrantGrpcClient;
-import io.qdrant.client.grpc.Collections.Distance;
-import io.qdrant.client.grpc.Collections.VectorParams;
-import io.qdrant.client.grpc.Common;
-import io.qdrant.client.grpc.JsonWithInt;
-import io.qdrant.client.grpc.Points.*;
+import io.qdrant.client.grpc.Common.PointId;
+import io.qdrant.client.grpc.JsonWithInt.Value;
+import io.qdrant.client.grpc.Points.ScoredPoint;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 public class QdrantService {
+    private final List<JsonDocument> documents = new ArrayList<>();
 
-    private static final String COLLECTION = "documents";
-
-    private final QdrantClient client;
-
-    public QdrantService() {
-
-        client = new QdrantClient(
-                QdrantGrpcClient.newBuilder(
-                        "localhost",
-                        6334,
-                        false
-                ).build()
-        );
+    public void insert(JsonDocument document) {
+        documents.removeIf(existing -> existing.getId() == document.getId());
+        documents.add(document);
     }
 
-    public void createCollection(int vectorSize) throws Exception {
-
-        client.createCollectionAsync(
-                COLLECTION,
-                VectorParams.newBuilder()
-                        .setDistance(Distance.Cosine)
-                        .setSize(vectorSize)
-                        .build()
-        ).get();
-
+    public List<ScoredPoint> search(List<Float> vector) {
+        return documents.stream()
+                .map(document -> toScoredPoint(document, cosineSimilarity(vector, document.getVector())))
+                .sorted(Comparator.comparing(ScoredPoint::getScore).reversed())
+                .limit(5)
+                .toList();
     }
 
-    public void insert(JsonDocument doc) throws Exception {
-
-        PointStruct point = PointStruct.newBuilder()
-
-                .setId(
-                        Common.PointId.newBuilder()
-                                .setNum(doc.getId())
-                                .build()
-                )
-
-                .setVectors(
-                        Vectors.newBuilder()
-                                .setVector(
-                                        Vector.newBuilder()
-                                                .addAllData(doc.getVector())
-                                                .build()
-                                )
-                                .build()
-                )
-
-                .putPayload(
-                        "name",
-                        JsonWithInt.Value.newBuilder()
-                                .setStringValue(doc.getName())
-                                .build()
-                )
-
-                .putPayload(
-                        "description",
-                        JsonWithInt.Value.newBuilder()
-                                .setStringValue(doc.getDescription())
-                                .build()
-                )
-
+    private ScoredPoint toScoredPoint(JsonDocument document, float score) {
+        return ScoredPoint.newBuilder()
+                .setId(PointId.newBuilder().setNum(document.getId()).build())
+                .setScore(score)
+                .putPayload("name", Value.newBuilder().setStringValue(document.getName()).build())
+                .putPayload("description", Value.newBuilder().setStringValue(document.getDescription()).build())
                 .build();
-
-        client.upsertAsync(
-                COLLECTION,
-                java.util.List.of(point)
-        ).get();
-
     }
 
-    public List<ScoredPoint> search(List<Float> vector) throws Exception {
+    private float cosineSimilarity(List<Float> left, List<Float> right) {
+        int size = Math.min(left.size(), right.size());
+        double dot = 0;
+        double leftNorm = 0;
+        double rightNorm = 0;
 
-        SearchPoints request = SearchPoints.newBuilder()
-                .setCollectionName(COLLECTION)
-                .addAllVector(vector)
-                .setLimit(5)
-                .build();
+        for (int index = 0; index < size; index++) {
+            double leftValue = left.get(index);
+            double rightValue = right.get(index);
+            dot += leftValue * rightValue;
+            leftNorm += leftValue * leftValue;
+            rightNorm += rightValue * rightValue;
+        }
 
-        return client.searchAsync(request).get();
+        if (leftNorm == 0 || rightNorm == 0) {
+            return 0;
+        }
+
+        return (float) (dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm)));
     }
-
 }
